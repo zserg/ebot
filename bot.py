@@ -5,6 +5,8 @@ from functools import wraps
 import google.generativeai as genai
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler
+from telegram.error import BadRequest
+from telegram.constants import ParseMode
 
 # Enable logging
 logging.basicConfig(
@@ -28,13 +30,14 @@ if not GEMINI_API_KEY:
 # --- Mode and State definitions ---
 MODE_TRAINING = 'mode_training'
 MODE_ENGLISH_ONLY = 'mode_english_only'
+MODE_EXPLAIN = 'mode_explain'
 
 STATE_AWAITING_PHRASE = 1
 STATE_AWAITING_REVEAL = 2
 
 # Configure Gemini API
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash-preview')
+model = genai.GenerativeModel('gemini-3-flash-preview')
 
 
 # --- Decorator for owner-only access ---
@@ -70,6 +73,7 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🎓 Training", callback_data=MODE_TRAINING)],
         [InlineKeyboardButton("🇬🇧 English Only", callback_data=MODE_ENGLISH_ONLY)],
+        [InlineKeyboardButton("🧑‍🏫 Explain", callback_data=MODE_EXPLAIN)],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text('Please choose a mode:', reply_markup=reply_markup)
@@ -83,7 +87,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.chat_data['mode'] = query.data
     context.chat_data['state'] = STATE_AWAITING_PHRASE # Reset state after mode change
 
-    await query.edit_message_text(text=f"Mode set to: {query.data}.\nSend me a phrase.")
+    await query.edit_message_text(text=f"Mode set to: {query.data}.\nSend me a word or phrase.")
 
 
 @owner_only
@@ -99,6 +103,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await handle_reveal_english(update, context)
     elif mode == MODE_ENGLISH_ONLY:
         await handle_english_only_generation(update, context)
+    elif mode == MODE_EXPLAIN:
+        await handle_explain_mode(update, context)
 
 
 async def handle_phrase_and_return_russian(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -162,6 +168,52 @@ Phrase: """
         
     except Exception as e:
         logging.error(f"Error in handle_english_only_generation: {e}")
+        await context.bot.send_message(chat_id=chat_id, text="An error occurred. Please try again.")
+
+async def handle_explain_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Explains a word or phrase as an English teacher, with a fallback for Markdown errors."""
+    user_message = update.message.text
+    chat_id = update.effective_chat.id
+
+    system_prompt = """You are an English teacher. The user will provide a word or a phrase.
+Your task is to explain its meaning in simple English. Provide a clear definition and 2-3 examples of modern use.
+Also give synonyms or another word/phrase that could be used instead the word or phrase (with examples).
+Format the response using Telegram's MarkdownV2 style.
+- Use *bold* for the main word/phrase.
+- Use _italic_ for emphasis.
+- Use bullet points starting with a hyphen '-'.
+- IMPORTANT: You MUST escape the characters `_`, `*`, `[`, `]`, `(`, `)`, `~`, `` ` ``, `>`, `#`, `+`, `-`, `=`, `|`, `{`, `}`, `.`, `!` in all other text by preceding them with a backslash `\`. For example, write `a\.b` instead of `a.b`.
+
+Word/Phrase: """
+    
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action='typing')
+        full_prompt = f"{system_prompt}{user_message}"
+        response = await model.generate_content_async(full_prompt)
+        
+        try:
+            # Try to send with MarkdownV2
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=response.text,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        except BadRequest as e:
+            # If Markdown parsing fails, log a warning and send as plain text
+            if "Can't parse entities" in str(e):
+                logging.warning(
+                    f"MarkdownV2 parsing failed for text: '{response.text}'. "
+                    f"Error: {e}. Sending as plain text."
+                )
+                await context.bot.send_message(chat_id=chat_id, text=response.text)
+            else:
+                # Re-raise the exception if it's a different error
+                raise e
+
+        await context.bot.send_message(chat_id=chat_id, text="Send me another word or phrase to explain.")
+        
+    except Exception as e:
+        logging.error(f"Error in handle_explain_mode: {e}")
         await context.bot.send_message(chat_id=chat_id, text="An error occurred. Please try again.")
 
 

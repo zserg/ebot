@@ -2,7 +2,12 @@ import logging
 import os
 import json
 from functools import wraps
+
+# LLM-related imports
 import google.generativeai as genai
+from gigachat import GigaChat
+from openai import AsyncOpenAI
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from telegram.error import BadRequest
@@ -16,7 +21,6 @@ logging.basicConfig(
 
 # --- Environment Variable Configuration ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 try:
     OWNER_ID = int(os.getenv("TELEGRAM_OWNER_ID"))
 except (TypeError, ValueError):
@@ -24,8 +28,63 @@ except (TypeError, ValueError):
 
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set.")
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable not set.")
+
+# --- LLM Provider Configuration ---
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "DEEPSEEK").upper()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GIGACHAT_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+
+gemini_model = None
+deepseek_client = None
+
+if LLM_PROVIDER == "GEMINI":
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY environment variable not set for GEMINI provider.")
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_model = genai.GenerativeModel('gemini-3-flash-preview')
+    logging.info("Using GEMINI as LLM provider.")
+elif LLM_PROVIDER == "GIGACHAT":
+    if not GIGACHAT_CREDENTIALS:
+        raise ValueError("GIGACHAT_CREDENTIALS environment variable not set for GIGACHAT provider.")
+    logging.info("Using GIGACHAT as LLM provider.")
+elif LLM_PROVIDER == "DEEPSEEK":
+    if not DEEPSEEK_API_KEY:
+        raise ValueError("DEEPSEEK_API_KEY environment variable not set for DEEPSEEK provider.")
+    deepseek_client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+    logging.info("Using DEEPSEEK as LLM provider.")
+else:
+    raise ValueError(f"Unknown LLM_PROVIDER: {LLM_PROVIDER}. Use 'GEMINI', 'GIGACHAT', or 'DEEPSEEK'.")
+
+
+# --- Generic LLM Response Function ---
+async def generate_llm_response(system_prompt: str, user_message: str) -> str:
+    """
+    Generates a response from the configured LLM provider.
+    """
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
+    ]
+
+    if LLM_PROVIDER == "GEMINI":
+        # Gemini prefers a single combined prompt
+        full_prompt = f"{system_prompt}\n\n{user_message}"
+        response = await gemini_model.generate_content_async(full_prompt)
+        return response.text
+    elif LLM_PROVIDER == "GIGACHAT":
+        async with GigaChat(credentials=GIGACHAT_CREDENTIALS, verify_ssl_certs=False) as client:
+            response = await client.achat(messages=messages)
+            return response.choices[0].message.content
+    elif LLM_PROVIDER == "DEEPSEEK":
+        response = await deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=messages
+        )
+        return response.choices[0].message.content
+        
+    return "Error: LLM Provider not configured correctly."
+
 
 # --- Mode and State definitions ---
 MODE_TRAINING = 'mode_training'
@@ -34,11 +93,6 @@ MODE_EXPLAIN = 'mode_explain'
 
 STATE_AWAITING_PHRASE = 1
 STATE_AWAITING_REVEAL = 2
-
-# Configure Gemini API
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-3-flash-preview')
-
 
 # --- Decorator for owner-only access ---
 def owner_only(func):
@@ -56,14 +110,13 @@ def owner_only(func):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Starts the conversation and sets the default mode."""
     context.chat_data.clear()
-    # Set default mode
     if 'mode' not in context.chat_data:
         context.chat_data['mode'] = MODE_TRAINING
 
     context.chat_data['state'] = STATE_AWAITING_PHRASE
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text=f"Welcome, owner! Current mode is '{context.chat_data['mode']}'.\n"
+        text=f"Welcome, owner! LLM: {LLM_PROVIDER}. Current mode: '{context.chat_data['mode']}'.\n"
              f"Send me a phrase to begin or use /mode to change it."
     )
 
@@ -85,14 +138,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     context.chat_data['mode'] = query.data
-    context.chat_data['state'] = STATE_AWAITING_PHRASE # Reset state after mode change
-
+    context.chat_data['state'] = STATE_AWAITING_PHRASE
     await query.edit_message_text(text=f"Mode set to: {query.data}.\nSend me a word or phrase.")
 
 
 @owner_only
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Main message handler that delegates to mode and state-specific handlers."""
+    """Main message handler that delegates to mode- and state-specific handlers."""
     mode = context.chat_data.get('mode', MODE_TRAINING)
     state = context.chat_data.get('state', STATE_AWAITING_PHRASE)
 
@@ -119,10 +171,9 @@ async def handle_phrase_and_return_russian(update: Update, context: ContextTypes
 
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action='typing')
-        full_prompt = f"{system_prompt}{user_message}"
-        response = await model.generate_content_async(full_prompt)
-        # It's better to clean the response from markdown code blocks
-        cleaned_text = response.text.strip().lstrip("```json").rstrip("```")
+        response_text = await generate_llm_response(system_prompt, f"Предложение: {user_message}")
+        
+        cleaned_text = response_text.strip().lstrip("```json").rstrip("```").strip()
         data = json.loads(cleaned_text)
 
         context.chat_data['english_text'] = data['english']
@@ -144,9 +195,9 @@ async def handle_reveal_english(update: Update, context: ContextTypes.DEFAULT_TY
     if english_text:
         await context.bot.send_message(chat_id=chat_id, text=english_text)
 
-    # Reset state for the next phrase
     context.chat_data['state'] = STATE_AWAITING_PHRASE
     await context.bot.send_message(chat_id=chat_id, text="Let's start over. Send me a new phrase.")
+
 
 async def handle_english_only_generation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates and sends only the English text."""
@@ -155,20 +206,19 @@ async def handle_english_only_generation(update: Update, context: ContextTypes.D
 
     system_prompt = """Given a sentence or a phrase.
 Task: create a text in English, consisting of 3-5 sentences, containing the given sentence or phrase.
-The result should be only the generated English text, without any other formatting or labels.
-Phrase: """
+The result should be only the generated English text, without any other formatting or labels."""
     
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action='typing')
-        full_prompt = f"{system_prompt}{user_message}"
-        response = await model.generate_content_async(full_prompt)
+        response_text = await generate_llm_response(system_prompt, f"Phrase: {user_message}")
         
-        await context.bot.send_message(chat_id=chat_id, text=response.text)
+        await context.bot.send_message(chat_id=chat_id, text=response_text)
         await context.bot.send_message(chat_id=chat_id, text="Send me another phrase.")
         
     except Exception as e:
         logging.error(f"Error in handle_english_only_generation: {e}")
         await context.bot.send_message(chat_id=chat_id, text="An error occurred. Please try again.")
+
 
 async def handle_explain_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Explains a word or phrase as an English teacher, with a fallback for Markdown errors."""
@@ -177,37 +227,30 @@ async def handle_explain_mode(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     system_prompt = """You are an English teacher. The user will provide a word or a phrase.
 Your task is to explain its meaning in simple English. Provide a clear definition and 2-3 examples of modern use.
-Also give synonyms or another word/phrase that could be used instead the word or phrase (with examples).
 Format the response using Telegram's MarkdownV2 style.
 - Use *bold* for the main word/phrase.
 - Use _italic_ for emphasis.
 - Use bullet points starting with a hyphen '-'.
-- IMPORTANT: You MUST escape the characters `_`, `*`, `[`, `]`, `(`, `)`, `~`, `` ` ``, `>`, `#`, `+`, `-`, `=`, `|`, `{`, `}`, `.`, `!` in all other text by preceding them with a backslash `\`. For example, write `a\.b` instead of `a.b`.
-
-Word/Phrase: """
+- IMPORTANT: You MUST escape the characters `_`, `*`, `[`, `]`, `(`, `)`, `~`, `` ` ``, `>`, `#`, `+`, `-`, `=`, `|`, `{`, `}`, `.`, `!` in all other text by preceding them with a backslash `\`. For example, write `a\.b` instead of `a.b`."""
     
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action='typing')
-        full_prompt = f"{system_prompt}{user_message}"
-        response = await model.generate_content_async(full_prompt)
+        response_text = await generate_llm_response(system_prompt, f"Word/Phrase: {user_message}")
         
         try:
-            # Try to send with MarkdownV2
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=response.text,
+                text=response_text,
                 parse_mode=ParseMode.MARKDOWN_V2
             )
         except BadRequest as e:
-            # If Markdown parsing fails, log a warning and send as plain text
             if "Can't parse entities" in str(e):
                 logging.warning(
-                    f"MarkdownV2 parsing failed for text: '{response.text}'. "
+                    f"MarkdownV2 parsing failed for text: '{response_text}'. "
                     f"Error: {e}. Sending as plain text."
                 )
-                await context.bot.send_message(chat_id=chat_id, text=response.text)
+                await context.bot.send_message(chat_id=chat_id, text=response_text)
             else:
-                # Re-raise the exception if it's a different error
                 raise e
 
         await context.bot.send_message(chat_id=chat_id, text="Send me another word or phrase to explain.")
@@ -225,5 +268,5 @@ if __name__ == '__main__':
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    print("Bot is running with owner-only restriction... Press Ctrl+C to stop.")
+    print(f"Bot is running with LLM Provider: {LLM_PROVIDER}. Press Ctrl+C to stop.")
     application.run_polling()

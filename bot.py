@@ -3,6 +3,11 @@ import os
 import json
 from functools import wraps
 
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 # LLM-related imports
 import google.generativeai as genai
 from gigachat import GigaChat

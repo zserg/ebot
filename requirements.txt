@@ -2,3 +2,4 @@ python-telegram-bot
 google-generativeai
 gigachat
 openai
+python-dotenv

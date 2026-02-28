@@ -90,6 +90,7 @@ async def generate_llm_response(system_prompt: str, user_message: str) -> str:
 MODE_TRAINING = 'mode_training'
 MODE_ENGLISH_ONLY = 'mode_english_only'
 MODE_EXPLAIN = 'mode_explain'
+MODE_RANDOM = 'mode_random'
 
 STATE_AWAITING_PHRASE = 1
 STATE_AWAITING_REVEAL = 2
@@ -117,7 +118,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text=f"Welcome, owner! LLM: {LLM_PROVIDER}. Current mode: '{context.chat_data['mode']}'.\n"
-             f"Send me a phrase to begin or use /mode to change it."
+             f"Send me a phrase to begin or use /mode to change it.\n"
+             f"Available modes: 🎓 Training, 🇬🇧 English Only, 🧑‍🏫 Explain, 🎲 Random Practice"
     )
 
 @owner_only
@@ -127,6 +129,7 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🎓 Training", callback_data=MODE_TRAINING)],
         [InlineKeyboardButton("🇬🇧 English Only", callback_data=MODE_ENGLISH_ONLY)],
         [InlineKeyboardButton("🧑‍🏫 Explain", callback_data=MODE_EXPLAIN)],
+        [InlineKeyboardButton("🎲 Random Practice", callback_data=MODE_RANDOM)],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text('Please choose a mode:', reply_markup=reply_markup)
@@ -139,7 +142,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.chat_data['mode'] = query.data
     context.chat_data['state'] = STATE_AWAITING_PHRASE
-    await query.edit_message_text(text=f"Mode set to: {query.data}.\nSend me a word or phrase.")
+    
+    if query.data == MODE_RANDOM:
+        await query.edit_message_text(text=f"Mode set to: {query.data}.\nSend any message or /next to get a random phrase.")
+    else:
+        await query.edit_message_text(text=f"Mode set to: {query.data}.\nSend me a word or phrase.")
 
 
 @owner_only
@@ -157,6 +164,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_english_only_generation(update, context)
     elif mode == MODE_EXPLAIN:
         await handle_explain_mode(update, context)
+    elif mode == MODE_RANDOM:
+        if state == STATE_AWAITING_PHRASE:
+            await handle_random_generation(update, context)
+        elif state == STATE_AWAITING_REVEAL:
+            await handle_reveal_english(update, context)
 
 
 async def handle_phrase_and_return_russian(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -188,15 +200,23 @@ async def handle_phrase_and_return_russian(update: Update, context: ContextTypes
 
 
 async def handle_reveal_english(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sends the stored English text and resets the flow for Training mode."""
+    """Sends the stored English text and resets the flow for Training/Random mode."""
     chat_id = update.effective_chat.id
     english_text = context.chat_data.get('english_text')
+    phrase = context.chat_data.get('phrase')
 
     if english_text:
-        await context.bot.send_message(chat_id=chat_id, text=english_text)
+        if phrase:
+            await context.bot.send_message(chat_id=chat_id, text=f"📝 *English:*\n{english_text}", parse_mode=ParseMode.MARKDOWN)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=english_text)
 
     context.chat_data['state'] = STATE_AWAITING_PHRASE
-    await context.bot.send_message(chat_id=chat_id, text="Let's start over. Send me a new phrase.")
+    mode = context.chat_data.get('mode', MODE_TRAINING)
+    if mode == MODE_RANDOM:
+        await context.bot.send_message(chat_id=chat_id, text="Send /next for a new phrase, or send any message to practice again with the same phrase.")
+    else:
+        await context.bot.send_message(chat_id=chat_id, text="Let's start over. Send me a new phrase.")
 
 
 async def handle_english_only_generation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -218,6 +238,56 @@ The result should be only the generated English text, without any other formatti
     except Exception as e:
         logging.error(f"Error in handle_english_only_generation: {e}")
         await context.bot.send_message(chat_id=chat_id, text="An error occurred. Please try again.")
+
+
+async def handle_random_generation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generates a random word/phrase and creates context text for practice."""
+    chat_id = update.effective_chat.id
+
+    system_prompt = """Ты — помощник для изучения английского языка.
+Сгенерируй случайное английское слово или короткую фразу (idiom, phrasal verb, или слово B1-C1 уровня).
+Затем составь текст на английском языке, состоящий из 3-5 предложений, содержащий это слово/фразу. Стиль - неформальный, разговорный, можно диалог.
+Также переведи текст на русский язык.
+Результат должен быть в формате JSON: {"phrase": "<Слово или фраза>", "russian":"<Текст на русском>", "english":"<Текст на английском>"}"""
+
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action='typing')
+        response_text = await generate_llm_response(system_prompt, "Сгенерируй случайное слово/фразу и текст.")
+        
+        cleaned_text = response_text.strip().lstrip("```json").rstrip("```").strip()
+        data = json.loads(cleaned_text)
+
+        context.chat_data['english_text'] = data['english']
+        context.chat_data['phrase'] = data['phrase']
+        
+        await context.bot.send_message(
+            chat_id=chat_id, 
+            text=f"🎯 *Phrase:* `{data['phrase']}`\n\n{data['russian']}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+        context.chat_data['state'] = STATE_AWAITING_REVEAL
+        await context.bot.send_message(
+            chat_id=chat_id, 
+            text="Send /next for a new phrase, or send any message to reveal the English version."
+        )
+    except Exception as e:
+        logging.error(f"Error in handle_random_generation: {e}")
+        context.chat_data.clear()
+        await context.bot.send_message(chat_id=chat_id, text="An error occurred. Let's start over.")
+
+
+@owner_only
+async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generates next random phrase in random mode."""
+    mode = context.chat_data.get('mode', MODE_TRAINING)
+    
+    if mode != MODE_RANDOM:
+        await update.message.reply_text("This command only works in 🎲 Random Practice mode. Use /mode to switch.")
+        return
+    
+    context.chat_data['state'] = STATE_AWAITING_PHRASE
+    await handle_random_generation(update, context)
 
 
 async def handle_explain_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -265,6 +335,7 @@ if __name__ == '__main__':
 
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('mode', mode_command))
+    application.add_handler(CommandHandler('next', next_command))
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 

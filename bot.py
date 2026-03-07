@@ -24,6 +24,13 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+# Setup prompt logging to file
+prompt_logger = logging.getLogger('prompt_logger')
+prompt_logger.setLevel(logging.INFO)
+prompt_handler = logging.FileHandler('prompts.log', encoding='utf-8')
+prompt_handler.setFormatter(logging.Formatter('%(asctime)s\n%(message)s\n{"="*50}\n'))
+prompt_logger.addHandler(prompt_handler)
+
 # --- Environment Variable Configuration ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 try:
@@ -67,6 +74,9 @@ async def generate_llm_response(system_prompt: str, user_message: str) -> str:
     """
     Generates a response from the configured LLM provider.
     """
+    # Log the prompt
+    prompt_logger.info(f"[PROVIDER: {LLM_PROVIDER}]\n\n[SYSTEM PROMPT]:\n{system_prompt}\n\n[USER MESSAGE]:\n{user_message}")
+    
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
@@ -378,14 +388,17 @@ async def handle_phrase_and_return_russian(update: Update, context: ContextTypes
     
     prompt_parts.append("Задача: составить текст на английском языке, состоящий из 3-5 предложений, содержащий данное предложение или фразу.")
     
+    # Add topic if set
+    if filters.get('topic'):
+        prompt_parts.append(f"Тема/контекст текста: {filters['topic']}.")
+    
+    # Add style if set, otherwise use default
     if filters.get('style'):
         prompt_parts.append(f"Стиль текста: {filters['style']}.")
-    elif filters.get('topic'):
-        # If topic is set but style isn't, mention topic in style
-        prompt_parts.append(f"Контекст: {filters['topic']}.")
     else:
         prompt_parts.append("Стиль - неформальный, разговорный, можно диалог.")
     
+    # Add grammar constructions if set
     if filters.get('grammar'):
         prompt_parts.append(f"Обязательно используй следующие грамматические конструкции: {filters['grammar']}.")
     

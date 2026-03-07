@@ -181,7 +181,7 @@ CUSTOM_GRAMMAR = [
     ('🔄 Present tenses', 'present', 'present simple, present continuous, present perfect'),
     ('⏰ Past tenses', 'past', 'past simple, past continuous, past perfect'),
     ('🔮 Future forms', 'future', 'will, going to, present continuous for future'),
-    ('❓ Conditionals', 'conditionals', 'zero, first, second, third conditionals'),
+    ('❓ Conditionals', 'conditionals', 'one of conditionals (zero, first, second or third)'),
     ('📝 Passive voice', 'passive', 'passive constructions in various tenses'),
     ('🎯 Phrasal verbs', 'phrasal', 'common phrasal verbs and particles'),
     ('📎 Relative clauses', 'relative', 'defining and non-defining relative clauses'),

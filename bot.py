@@ -218,11 +218,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
              f"🇬🇧 *English Only* — generate English text\n"
              f"🧑‍🏫 *Explain* — get word/phrase explanations\n"
              f"🎲 *Random Practice* — random phrases with context\n\n"
-             f"*Commands:*\n"
-             f"/mode — change practice mode\n"
-             f"/preset — quick filter presets for Random mode\n"
+             f"*Filter commands (work in Training/Random/English modes):*\n"
+             f"/preset — quick filter presets\n"
              f"/custom — create custom filters (topic, style, grammar)\n"
              f"/filters — view current filter settings\n"
+             f"/clear — reset filters to default\n\n"
+             f"*Other commands:*\n"
+             f"/mode — change practice mode\n"
              f"/next — generate new random phrase",
         parse_mode=ParseMode.MARKDOWN
     )
@@ -367,11 +369,31 @@ async def handle_phrase_and_return_russian(update: Update, context: ContextTypes
     """Generates texts, sends Russian part, stores English part."""
     user_message = update.message.text
     chat_id = update.effective_chat.id
-
-    system_prompt = """Дано предложение или фраза.
-Задача: составить текст на английском языке, состоящий из 3-5 предложений, содержащий данное предложение или фразу. Стиль - неформальный, разговорный, можно диалог. Также перевести текст на русский язык.
-Результат должен быть в формате JSON: {"phrase": "<Исходное предложение>", "russian":"<Текст на русском>", "english":"<Текст на английском>"}
-Предложение: """
+    
+    # Get filters from chat_data
+    filters = context.chat_data.get('filters', {})
+    
+    # Build prompt with filters
+    prompt_parts = ["Дано предложение или фраза."]
+    
+    prompt_parts.append("Задача: составить текст на английском языке, состоящий из 3-5 предложений, содержащий данное предложение или фразу.")
+    
+    if filters.get('style'):
+        prompt_parts.append(f"Стиль текста: {filters['style']}.")
+    elif filters.get('topic'):
+        # If topic is set but style isn't, mention topic in style
+        prompt_parts.append(f"Контекст: {filters['topic']}.")
+    else:
+        prompt_parts.append("Стиль - неформальный, разговорный, можно диалог.")
+    
+    if filters.get('grammar'):
+        prompt_parts.append(f"Обязательно используй следующие грамматические конструкции: {filters['grammar']}.")
+    
+    prompt_parts.append("Также перевести текст на русский язык.")
+    prompt_parts.append('Результат должен быть в формате JSON: {"phrase": "<Исходное предложение>", "russian":"<Текст на русском>", "english":"<Текст на английском>"}')
+    prompt_parts.append("Предложение: ")
+    
+    system_prompt = "\n".join(prompt_parts)
 
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action='typing')
@@ -415,10 +437,24 @@ async def handle_english_only_generation(update: Update, context: ContextTypes.D
     """Generates and sends only the English text."""
     user_message = update.message.text
     chat_id = update.effective_chat.id
-
-    system_prompt = """Given a sentence or a phrase.
-Task: create a text in English, consisting of 3-5 sentences, containing the given sentence or phrase.
-The result should be only the generated English text, without any other formatting or labels."""
+    
+    # Get filters from chat_data
+    filters = context.chat_data.get('filters', {})
+    
+    # Build prompt with filters
+    prompt_parts = ["Given a sentence or a phrase."]
+    prompt_parts.append("Task: create a text in English, consisting of 3-5 sentences, containing the given sentence or phrase.")
+    
+    if filters.get('style'):
+        prompt_parts.append(f"Style: {filters['style']}.")
+    if filters.get('topic'):
+        prompt_parts.append(f"Context/theme: {filters['topic']}.")
+    if filters.get('grammar'):
+        prompt_parts.append(f"Must use these grammar constructions: {filters['grammar']}.")
+    
+    prompt_parts.append("The result should be only the generated English text, without any other formatting or labels.")
+    
+    system_prompt = "\n".join(prompt_parts)
     
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action='typing')
@@ -581,9 +617,23 @@ async def filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "⚙️ *Текущие настройки генерации:*\n\n"
     text += format_filters(filters)
     text += "\n\nИспользуй /preset для выбора готового пресета\n"
-    text += "Или /custom для создания своих настроек"
+    text += "Или /custom для создания своих настроек\n"
+    text += "Или /clear для сброса фильтров"
     
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
+
+@owner_only
+async def clear_filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Clears all active filters."""
+    if 'filters' in context.chat_data:
+        del context.chat_data['filters']
+    
+    await update.message.reply_text(
+        "✅ *Фильтры сброшены!*\n\n"
+        "Теперь генерация будет происходить без ограничений (режим Mixed).",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 
 async def handle_explain_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -635,6 +685,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('preset', preset_command))
     application.add_handler(CommandHandler('custom', custom_command))
     application.add_handler(CommandHandler('filters', filters_command))
+    application.add_handler(CommandHandler('clear', clear_filters_command))
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 

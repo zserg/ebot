@@ -100,6 +100,94 @@ MODE_RANDOM = 'mode_random'
 STATE_AWAITING_PHRASE = 1
 STATE_AWAITING_REVEAL = 2
 
+# --- Custom filter states ---
+STATE_CUSTOM_TOPIC = 10
+STATE_CUSTOM_STYLE = 11
+STATE_CUSTOM_GRAMMAR = 12
+
+# --- Presets for Random Practice ---
+PRESETS = {
+    'business': {
+        'name': '💼 Business',
+        'topic': 'business, office, negotiations, meetings',
+        'style': 'formal, professional, polite',
+        'grammar': 'modal verbs, conditionals, passive voice'
+    },
+    'travel': {
+        'name': '✈️ Travel',
+        'topic': 'traveling, airports, hotels, sightseeing',
+        'style': 'conversational, tourist situations',
+        'grammar': 'going to, present continuous for future, phrasal verbs'
+    },
+    'casual': {
+        'name': '😎 Casual',
+        'topic': 'daily life, hobbies, friends, relationships',
+        'style': 'informal, relaxed, slang allowed',
+        'grammar': 'phrasal verbs, informal contractions, idioms'
+    },
+    'academic': {
+        'name': '🎓 Academic',
+        'topic': 'science, education, research, university life',
+        'style': 'formal, academic, precise',
+        'grammar': 'passive voice, complex sentences, linking words'
+    },
+    'technology': {
+        'name': '💻 Technology',
+        'topic': 'computers, internet, AI, gadgets, programming',
+        'style': 'modern, technical but accessible',
+        'grammar': 'present simple for facts, technical terminology'
+    },
+    'mixed': {
+        'name': '🎲 Mixed (No filters)',
+        'topic': None,
+        'style': None,
+        'grammar': None
+    }
+}
+
+# --- Custom options for /custom command ---
+# Using short IDs to avoid Telegram's 64-byte callback_data limit
+CUSTOM_TOPICS = [
+    ('🏥 Health & Medicine', 'health', 'health, medicine, doctor visits, fitness'),
+    ('🍔 Food & Cooking', 'food', 'food, cooking, restaurants, recipes'),
+    ('🎬 Movies & Entertainment', 'movies', 'movies, TV shows, music, celebrities'),
+    ('🏠 Home & Family', 'home', 'home, family, household, daily routines'),
+    ('🌦️ Weather & Nature', 'weather', 'weather, seasons, environment, nature'),
+    ('🛒 Shopping', 'shopping', 'shopping, stores, online shopping, products'),
+    ('💰 Money & Finance', 'money', 'money, banking, investing, budgeting'),
+    ('💼 Work & Career', 'work', 'work, career, job interviews, office'),
+]
+
+CUSTOM_STYLES = [
+    ('📧 Formal', 'formal', 'formal, polite, professional'),
+    ('💬 Conversational', 'conversational', 'conversational, natural, everyday speech'),
+    ('😄 Casual/Slang', 'casual', 'casual, informal, slang, relaxed'),
+    ('📚 Academic', 'academic', 'academic, scholarly, precise'),
+    ('📰 Journalistic', 'journalistic', 'journalistic, informative, engaging'),
+    ('🎭 Creative', 'creative', 'creative, descriptive, storytelling'),
+]
+
+CUSTOM_GRAMMAR = [
+    ('🔄 Present tenses', 'present', 'present simple, present continuous, present perfect'),
+    ('⏰ Past tenses', 'past', 'past simple, past continuous, past perfect'),
+    ('🔮 Future forms', 'future', 'will, going to, present continuous for future'),
+    ('❓ Conditionals', 'conditionals', 'zero, first, second, third conditionals'),
+    ('📝 Passive voice', 'passive', 'passive constructions in various tenses'),
+    ('🎯 Phrasal verbs', 'phrasal', 'common phrasal verbs and particles'),
+    ('📎 Relative clauses', 'relative', 'defining and non-defining relative clauses'),
+    ('⚡ Reported speech', 'reported', 'reported statements, questions, commands'),
+    ('🎨 Adjective clauses', 'adjective', 'participles, reduced relative clauses'),
+    ('🔗 Linking words', 'linking', 'however, although, despite, furthermore'),
+]
+
+# Build lookup dictionaries
+def build_lookup(options_list):
+    return {short_id: full_value for _, short_id, full_value in options_list}
+
+TOPICS_LOOKUP = build_lookup(CUSTOM_TOPICS)
+STYLES_LOOKUP = build_lookup(CUSTOM_STYLES)
+GRAMMAR_LOOKUP = build_lookup(CUSTOM_GRAMMAR)
+
 # --- Decorator for owner-only access ---
 def owner_only(func):
     @wraps(func)
@@ -122,9 +210,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.chat_data['state'] = STATE_AWAITING_PHRASE
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text=f"Welcome, owner! LLM: {LLM_PROVIDER}. Current mode: '{context.chat_data['mode']}'.\n"
-             f"Send me a phrase to begin or use /mode to change it.\n"
-             f"Available modes: 🎓 Training, 🇬🇧 English Only, 🧑‍🏫 Explain, 🎲 Random Practice"
+        text=f"👋 Welcome, owner!\n\n"
+             f"🤖 *LLM Provider:* `{LLM_PROVIDER}`\n"
+             f"📌 *Current mode:* `{context.chat_data['mode']}`\n\n"
+             f"*Available modes:*\n"
+             f"🎓 *Training* — practice with your phrases\n"
+             f"🇬🇧 *English Only* — generate English text\n"
+             f"🧑‍🏫 *Explain* — get word/phrase explanations\n"
+             f"🎲 *Random Practice* — random phrases with context\n\n"
+             f"*Commands:*\n"
+             f"/mode — change practice mode\n"
+             f"/preset — quick filter presets for Random mode\n"
+             f"/custom — create custom filters (topic, style, grammar)\n"
+             f"/filters — view current filter settings\n"
+             f"/next — generate new random phrase",
+        parse_mode=ParseMode.MARKDOWN
     )
 
 @owner_only
@@ -141,17 +241,104 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Parses the CallbackQuery and updates the chat mode."""
+    """Parses the CallbackQuery and updates the chat mode or filters."""
     query = update.callback_query
     await query.answer()
-
-    context.chat_data['mode'] = query.data
-    context.chat_data['state'] = STATE_AWAITING_PHRASE
     
-    if query.data == MODE_RANDOM:
-        await query.edit_message_text(text=f"Mode set to: {query.data}.\nSend any message or /next to get a random phrase.")
-    else:
-        await query.edit_message_text(text=f"Mode set to: {query.data}.\nSend me a word or phrase.")
+    data = query.data
+    
+    # Handle preset selection
+    if data.startswith("preset:"):
+        preset_id = data.replace("preset:", "")
+        preset = PRESETS.get(preset_id)
+        
+        if preset:
+            # Store filters
+            context.chat_data['filters'] = {
+                'topic': preset.get('topic'),
+                'style': preset.get('style'),
+                'grammar': preset.get('grammar'),
+                'preset': preset.get('name')
+            }
+            
+            await query.edit_message_text(
+                text=f"✅ Пресет *{preset['name']}* активирован!\n\n"
+                     f"{format_filters(context.chat_data['filters'])}\n\n"
+                     f"Теперь в режиме 🎲 Random Practice фразы будут генерироваться с этими настройками.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        return
+    
+    # Handle custom topic selection
+    if data.startswith("custom_topic:"):
+        short_id = data.replace("custom_topic:", "")
+        
+        if 'filters' not in context.chat_data:
+            context.chat_data['filters'] = {}
+        
+        if short_id != 'skip':
+            context.chat_data['filters']['topic'] = TOPICS_LOOKUP.get(short_id)
+        
+        # Show style selection
+        keyboard = [[InlineKeyboardButton(name, callback_data=f"custom_style:{short_id}")] 
+                    for name, short_id, _ in CUSTOM_STYLES]
+        keyboard.append([InlineKeyboardButton("🔄 Пропустить", callback_data="custom_style:skip")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            text='🔧 *Настройка генерации* (шаг 2/3)\n\n'
+                 'Выбери стиль текста:',
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    # Handle custom style selection
+    if data.startswith("custom_style:"):
+        short_id = data.replace("custom_style:", "")
+        
+        if short_id != 'skip':
+            context.chat_data['filters']['style'] = STYLES_LOOKUP.get(short_id)
+        
+        # Show grammar selection
+        keyboard = [[InlineKeyboardButton(name, callback_data=f"custom_grammar:{short_id}")] 
+                    for name, short_id, _ in CUSTOM_GRAMMAR]
+        keyboard.append([InlineKeyboardButton("🔄 Пропустить", callback_data="custom_grammar:skip")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            text='🔧 *Настройка генерации* (шаг 3/3)\n\n'
+                 'Выбери грамматические конструкции:',
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    # Handle custom grammar selection
+    if data.startswith("custom_grammar:"):
+        short_id = data.replace("custom_grammar:", "")
+        
+        if short_id != 'skip':
+            context.chat_data['filters']['grammar'] = GRAMMAR_LOOKUP.get(short_id)
+        
+        # Show final summary
+        filters_text = format_filters(context.chat_data['filters'])
+        await query.edit_message_text(
+            text=f"✅ *Настройки сохранены!*\n\n{filters_text}\n\n"
+                 f"Теперь в режиме 🎲 Random Practice фразы будут генерироваться с этими параметрами.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    # Handle mode selection (original behavior)
+    if data in [MODE_TRAINING, MODE_ENGLISH_ONLY, MODE_EXPLAIN, MODE_RANDOM]:
+        context.chat_data['mode'] = data
+        context.chat_data['state'] = STATE_AWAITING_PHRASE
+        
+        if data == MODE_RANDOM:
+            await query.edit_message_text(text=f"Mode set to: {data}.\nSend any message or /next to get a random phrase.")
+        else:
+            await query.edit_message_text(text=f"Mode set to: {data}.\nSend me a word or phrase.")
 
 
 @owner_only
@@ -248,12 +435,10 @@ The result should be only the generated English text, without any other formatti
 async def handle_random_generation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates a random word/phrase and creates context text for practice."""
     chat_id = update.effective_chat.id
-
-    system_prompt = """Ты — помощник для изучения английского языка.
-Сгенерируй случайное английское слово или короткую фразу (idiom, phrasal verb, или слово B1-C1 уровня).
-Затем составь текст на английском языке, состоящий из 3-5 предложений, содержащий это слово/фразу. Стиль - неформальный, разговорный, можно диалог.
-Также переведи текст на русский язык.
-Результат должен быть в формате JSON: {"phrase": "<Слово или фраза>", "russian":"<Текст на русском>", "english":"<Текст на английском>"}"""
+    
+    # Get filters from chat_data
+    filters = context.chat_data.get('filters', {})
+    system_prompt = build_random_prompt(filters)
 
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action='typing')
@@ -293,6 +478,112 @@ async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.chat_data['state'] = STATE_AWAITING_PHRASE
     await handle_random_generation(update, context)
+
+
+# --- Helper functions for filters ---
+def build_random_prompt(filters: dict = None) -> str:
+    """Builds system prompt for random generation with optional filters."""
+    filters = filters or {}
+    
+    parts = ["Ты — помощник для изучения английского языка."]
+    
+    # Build constraints description
+    constraints = []
+    
+    if filters.get('topic'):
+        constraints.append(f"тема: {filters['topic']}")
+    if filters.get('style'):
+        constraints.append(f"стиль: {filters['style']}")
+    if filters.get('grammar'):
+        constraints.append(f"грамматика: {filters['grammar']}")
+    
+    if constraints:
+        parts.append(f"Сгенерируй случайное английское слово или короткую фразу (idiom, phrasal verb, или слово B1-C1 уровня) на {'; '.join(constraints)}.")
+    else:
+        parts.append("Сгенерируй случайное английское слово или короткую фразу (idiom, phrasal verb, или слово B1-C1 уровня).")
+    
+    parts.append("Затем составь текст на английском языке, состоящий из 3-5 предложений, содержащий это слово/фразу.")
+    
+    if filters.get('style'):
+        parts.append(f"Стиль текста: {filters['style']}.")
+    else:
+        parts.append("Стиль - неформальный, разговорный, можно диалог.")
+    
+    if filters.get('grammar'):
+        parts.append(f"Обязательно используй следующие грамматические конструкции: {filters['grammar']}.")
+    
+    parts.append("Также переведи текст на русский язык.")
+    parts.append('Результат должен быть в формате JSON: {"phrase": "<Слово или фраза>", "russian":"<Текст на русском>", "english":"<Текст на английском>"}')
+    
+    return "\n".join(parts)
+
+
+def format_filters(filters: dict) -> str:
+    """Format current filters for display."""
+    if not filters or not any(filters.values()):
+        return "Нет активных фильтров (случайная генерация)"
+    
+    lines = []
+    if filters.get('topic'):
+        lines.append(f"📌 *Тема:* {filters['topic']}")
+    if filters.get('style'):
+        lines.append(f"🎨 *Стиль:* {filters['style']}")
+    if filters.get('grammar'):
+        lines.append(f"📚 *Грамматика:* {filters['grammar']}")
+    if filters.get('preset'):
+        lines.append(f"⚙️ *Пресет:* {filters['preset']}")
+    
+    return "\n".join(lines)
+
+
+@owner_only
+async def preset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows preset selection buttons."""
+    keyboard = []
+    for preset_id, preset_data in PRESETS.items():
+        keyboard.append([InlineKeyboardButton(preset_data['name'], callback_data=f"preset:{preset_id}")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        '🎯 Выбери пресет для генерации фраз:\n\n'
+        '💼 *Business* — формальный стиль, деловая лексика\n'
+        '✈️ *Travel* — путешествия, разговорный стиль\n'
+        '😎 *Casual* — повседневная жизнь, сленг\n'
+        '🎓 *Academic* — научный стиль, сложные конструкции\n'
+        '💻 *Technology* — технологии, современная лексика\n'
+        '🎲 *Mixed* — без фильтров (как раньше)',
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+@owner_only
+async def custom_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Starts custom filter selection wizard."""
+    keyboard = [[InlineKeyboardButton(name, callback_data=f"custom_topic:{short_id}")] 
+                for name, short_id, _ in CUSTOM_TOPICS]
+    keyboard.append([InlineKeyboardButton("🔄 Пропустить", callback_data="custom_topic:skip")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        '🔧 *Настройка генерации* (шаг 1/3)\n\n'
+        'Выбери тему для фразы:',
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+@owner_only
+async def filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows current active filters."""
+    filters = context.chat_data.get('filters', {})
+    
+    text = "⚙️ *Текущие настройки генерации:*\n\n"
+    text += format_filters(filters)
+    text += "\n\nИспользуй /preset для выбора готового пресета\n"
+    text += "Или /custom для создания своих настроек"
+    
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 
 async def handle_explain_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -341,6 +632,9 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('mode', mode_command))
     application.add_handler(CommandHandler('next', next_command))
+    application.add_handler(CommandHandler('preset', preset_command))
+    application.add_handler(CommandHandler('custom', custom_command))
+    application.add_handler(CommandHandler('filters', filters_command))
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 

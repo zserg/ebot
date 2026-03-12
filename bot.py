@@ -46,6 +46,8 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "DEEPSEEK").upper()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GIGACHAT_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
 
 gemini_model = None
 deepseek_client = None
@@ -65,8 +67,18 @@ elif LLM_PROVIDER == "DEEPSEEK":
         raise ValueError("DEEPSEEK_API_KEY environment variable not set for DEEPSEEK provider.")
     deepseek_client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
     logging.info("Using DEEPSEEK as LLM provider.")
+elif LLM_PROVIDER == "OPENROUTER":
+    if not OPENROUTER_API_KEY:
+        raise ValueError("OPENROUTER_API_KEY environment variable not set for OPENROUTER provider.")
+    if not OPENROUTER_MODEL:
+        raise ValueError("OPENROUTER_MODEL environment variable not set for OPENROUTER provider.")
+    deepseek_client = AsyncOpenAI(
+        api_key=OPENROUTER_API_KEY,
+        base_url="https://openrouter.ai/api/v1"
+    )
+    logging.info(f"Using OPENROUTER as LLM provider with model: {OPENROUTER_MODEL}")
 else:
-    raise ValueError(f"Unknown LLM_PROVIDER: {LLM_PROVIDER}. Use 'GEMINI', 'GIGACHAT', or 'DEEPSEEK'.")
+    raise ValueError(f"Unknown LLM_PROVIDER: {LLM_PROVIDER}. Use 'GEMINI', 'GIGACHAT', 'DEEPSEEK', or 'OPENROUTER'.")
 
 
 # --- Generic LLM Response Function ---
@@ -94,6 +106,12 @@ async def generate_llm_response(system_prompt: str, user_message: str) -> str:
     elif LLM_PROVIDER == "DEEPSEEK":
         response = await deepseek_client.chat.completions.create(
             model="deepseek-chat",
+            messages=messages
+        )
+        return response.choices[0].message.content
+    elif LLM_PROVIDER == "OPENROUTER":
+        response = await deepseek_client.chat.completions.create(
+            model=OPENROUTER_MODEL,
             messages=messages
         )
         return response.choices[0].message.content
@@ -386,7 +404,7 @@ async def handle_phrase_and_return_russian(update: Update, context: ContextTypes
     # Build prompt with filters
     prompt_parts = ["Дано предложение или фраза."]
     
-    prompt_parts.append("Задача: составить текст на английском языке, состоящий из 2-3 предложений, содержащий данное предложение или фразу.")
+    prompt_parts.append("Задача: составить текст на английском языке, состоящий из 3-4 предложений, содержащий данное предложение или фразу.")
     
     # Add topic if set
     if filters.get('topic'):

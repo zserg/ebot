@@ -386,7 +386,7 @@ async def handle_phrase_and_return_russian(update: Update, context: ContextTypes
     # Build prompt with filters
     prompt_parts = ["Дано предложение или фраза."]
     
-    prompt_parts.append("Задача: составить текст на английском языке, состоящий из 3-5 предложений, содержащий данное предложение или фразу.")
+    prompt_parts.append("Задача: составить текст на английском языке, состоящий из 2-3 предложений, содержащий данное предложение или фразу.")
     
     # Add topic if set
     if filters.get('topic'):
